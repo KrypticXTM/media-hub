@@ -4,7 +4,10 @@ import path from "path";
 import type { MediaItem, MediaItemRow, MediaType } from "./types";
 import { ensureUploadDir } from "./storage";
 
-const DATA_DIR = path.join(process.cwd(), "data");
+const DATA_DIR =
+  process.env.VERCEL || process.env.DATA_DIR
+    ? path.join(process.env.DATA_DIR || "/tmp", "media-hub")
+    : path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "media.db");
 
 let dbInstance: DatabaseSync | null = null;

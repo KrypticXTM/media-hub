@@ -17,7 +17,10 @@ import fs from "fs";
 import path from "path";
 import { randomBytes } from "crypto";
 
-const UPLOAD_DIR = path.join(process.cwd(), "data", "uploads");
+const UPLOAD_DIR =
+  process.env.VERCEL || process.env.DATA_DIR
+    ? path.join(process.env.DATA_DIR || "/tmp", "media-hub", "uploads")
+    : path.join(process.cwd(), "data", "uploads");
 
 export function ensureUploadDir(): void {
   if (!fs.existsSync(UPLOAD_DIR)) {

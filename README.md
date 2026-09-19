@@ -53,7 +53,7 @@ Comments in src/lib/storage.ts explain how to later swap local disk for S3, Clou
 
 ## Free deploy notes (Vercel)
 
-This is a Next.js app, so Vercel can host the code. Caveat: SQLite and local uploads do not persist on typical serverless hosts. For a lasting public site, plan on a hosted database (for example Turso) plus object storage (R2/S3/Blob), or run the app on a small always-on machine / VPS. If you deploy a short demo, set ADMIN_PASSWORD and SESSION_SECRET in the host environment settings.
+On free Vercel, the shop and browsing work, but owner uploads on the public URL won't stick; use a local PC or a paid disk host for lasting uploads.
 
 ## Main routes
 
