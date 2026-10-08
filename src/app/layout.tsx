@@ -10,6 +10,12 @@ const siteUrl =
     ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
     : "https://media-hub-lyart.vercel.app");
 
+// Site-wide Open Graph / Twitter Card defaults (pages with their own openGraph/twitter override these).
+const shareUrl = "https://media-hub-lyart.vercel.app";
+const shareTitle = "The Workshop - KrypticXtm";
+const shareDescription = "Apps and pages I built with Grok and Grokbot. Explore The Workshop.";
+const shareImage = `${shareUrl}/covers/active-projects.jpg`;
+
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
@@ -18,6 +24,20 @@ export const metadata: Metadata = {
   },
   description:
     "The Workshop - KrypticXtm — media library and shop for digital products (support via Buy Me A Coffee).",
+  openGraph: {
+    type: "website",
+    siteName: shareTitle,
+    title: shareTitle,
+    description: shareDescription,
+    url: `${shareUrl}/`,
+    images: [{ url: shareImage, width: 1280, height: 720, alt: shareTitle }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: shareTitle,
+    description: shareDescription,
+    images: [shareImage],
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
