@@ -15,31 +15,18 @@ export interface MediaItem {
   description: string;
   type: MediaType;
   tags: string[]; // parsed from comma-separated DB field
+  /** Public Vercel Blob URL of the uploaded file (or null for projects). */
   filename: string | null;
   originalName: string | null;
   mimeType: string | null;
   sizeBytes: number | null;
   projectUrl: string | null;
+  /** Public Vercel Blob URL, or a static path like /covers/x.jpg for code-defined items. */
   coverFilename: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface MediaItemRow {
-  id: number;
-  slug: string;
-  title: string;
-  description: string;
-  type: MediaType;
-  tags: string;
-  filename: string | null;
-  original_name: string | null;
-  mime_type: string | null;
-  size_bytes: number | null;
-  project_url: string | null;
-  cover_filename: string | null;
-  created_at: string;
-  updated_at: string;
+  createdAt: string; // ISO 8601
+  updatedAt: string; // ISO 8601
+  /** Code-defined item (Word Lightning, LUMINA) — always present, not editable/deletable. */
+  builtin?: boolean;
 }
 
 export const MEDIA_TYPES: { value: MediaType; label: string }[] = [

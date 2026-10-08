@@ -12,8 +12,10 @@ export default async function LibraryPage({
   searchParams: Promise<{ q?: string; type?: string; tag?: string }>;
 }) {
   const sp = await searchParams;
-  const items = listItems({ q: sp.q, type: sp.type, tag: sp.tag });
-  const tags = getAllTags();
+  const [items, tags] = await Promise.all([
+    listItems({ q: sp.q, type: sp.type, tag: sp.tag }),
+    getAllTags(),
+  ]);
 
   return (
     <div className="space-y-8">

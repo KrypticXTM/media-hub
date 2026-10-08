@@ -1,323 +1,319 @@
-import { DatabaseSync } from "node:sqlite";
-import fs from "fs";
-import path from "path";
-import type { MediaItem, MediaItemRow, MediaType } from "./types";
-import { ensureUploadDir } from "./storage";
+/**
+ * Library item store.
+ *
+ * Items live in ONE JSON document in Vercel Blob: library/items.json
+ *   { version: 1, nextId: number, items: StoredItem[] }
+ * Files themselves are separate public blobs (see storage.ts / /api/upload).
+ *
+ * Code-defined items (Word Lightning, LUMINA) are NOT stored in Blob; they are
+ * merged in at read time so they always exist and can't be deleted.
+ *
+ * Freshness:
+ * - Every read of items.json is consistent (see readDocFresh): head() gives
+ *   the current ETag and the content is read from an immutable,
+ *   content-addressed copy, so CDN caching can never serve a stale list.
+ *   Writes are read-modify-write guarded by that ETag (ifMatch) so concurrent
+ *   writes can't clobber each other, then invalidate the "library-items" tag.
+ * - Public page reads go through Next's data cache tagged "library-items",
+ *   so they refresh immediately after any write made through the app (admin
+ *   upload/edit/delete) and otherwise at most hourly (only matters for changes
+ *   made outside the app). This keeps Blob operations well inside the free
+ *   Hobby allowance (10k simple ops/month) even if a share link gets busy.
+ */
+import { put, head, del, BlobNotFoundError, BlobPreconditionFailedError } from "@vercel/blob";
+import { createHash } from "crypto";
+import { revalidateTag, unstable_cache } from "next/cache";
+import type { MediaItem, MediaType } from "./types";
+import { isBlobConfigured, publicBlobUrl, requireBlobToken } from "./storage";
+import { makeSlug } from "./slug";
 
-const DATA_DIR =
-  process.env.VERCEL || process.env.DATA_DIR
-    ? path.join(process.env.DATA_DIR || "/tmp", "media-hub")
-    : path.join(process.cwd(), "data");
-const DB_PATH = path.join(DATA_DIR, "media.db");
+const ITEMS_PATHNAME = "library/items.json";
+const VERSIONS_PREFIX = "library/index/";
+const CACHE_TAG = "library-items";
+const CACHE_SECONDS = 3600;
 
-let dbInstance: DatabaseSync | null = null;
-
-function rowToItem(row: MediaItemRow): MediaItem {
-  return {
-    id: row.id,
-    slug: row.slug,
-    title: row.title,
-    description: row.description || "",
-    type: row.type,
-    tags: row.tags
-      ? row.tags
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean)
-      : [],
-    filename: row.filename,
-    originalName: row.original_name,
-    mimeType: row.mime_type,
-    sizeBytes: row.size_bytes,
-    projectUrl: row.project_url,
-    coverFilename: row.cover_filename,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
+interface StoredItem {
+  id: number;
+  slug: string;
+  title: string;
+  description: string;
+  type: MediaType;
+  tags: string[];
+  fileUrl: string | null;
+  originalName: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  projectUrl: string | null;
+  coverUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export function getDb(): DatabaseSync {
-  if (dbInstance) return dbInstance;
-
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-  ensureUploadDir();
-
-  const db = new DatabaseSync(DB_PATH);
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA foreign_keys = ON");
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS media_items (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      slug TEXT NOT NULL UNIQUE,
-      title TEXT NOT NULL,
-      description TEXT NOT NULL DEFAULT '',
-      type TEXT NOT NULL,
-      tags TEXT NOT NULL DEFAULT '',
-      filename TEXT,
-      original_name TEXT,
-      mime_type TEXT,
-      size_bytes INTEGER,
-      project_url TEXT,
-      cover_filename TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_media_type ON media_items(type);
-    CREATE INDEX IF NOT EXISTS idx_media_slug ON media_items(slug);
-  `);
-
-  dbInstance = db;
-
-  // Demo/sample items are no longer seeded; remove any left over from older builds.
-  db.prepare(
-    "DELETE FROM media_items WHERE slug IN ('studio-still-demo','welcome-notes-demo','sample-pdf-demo','shape-morph-demo')"
-  ).run();
-
-  // Always ensure featured Grok Build apps exist (existing DBs + redeploys)
-  ensureWordLightning(db);
-  ensureLumina(db);
-
-  return db;
+interface LibraryDoc {
+  version: 1;
+  nextId: number;
+  items: StoredItem[];
 }
 
+const EMPTY_DOC: LibraryDoc = { version: 1, nextId: 1, items: [] };
 
-// Static public asset (bundled with the deploy) — not /tmp uploads
-const WORD_LIGHTNING_COVER = "/covers/word-lightning.jpg";
-const WORD_LIGHTNING_SLUG = "word-lightning";
+// ---------------------------------------------------------------------------
+// Code-defined items (covers are static files in public/covers)
+// ---------------------------------------------------------------------------
 
-/** Upsert the Library project card. Cover is served from public/covers (Vercel-safe). */
-function ensureWordLightning(db: DatabaseSync): void {
-  const fields = {
-    slug: WORD_LIGHTNING_SLUG,
+const BUILTIN_ITEMS: MediaItem[] = [
+  {
+    id: -1,
+    slug: "word-lightning",
     title: "Word Lightning",
     description:
       "A Grok Build app for verbal fluency. Open the live app from The Workshop - KrypticXtm.",
     type: "project",
-    tags: "app,grok-build,word-lightning",
-    filename: null as string | null,
-    original_name: null as string | null,
-    mime_type: null as string | null,
-    size_bytes: null as number | null,
-    project_url: "https://harbor-beacon-prism-swift.grok.me",
-    cover_filename: WORD_LIGHTNING_COVER,
-  };
-
-  const existing = db
-    .prepare("SELECT id FROM media_items WHERE slug = ?")
-    .get(WORD_LIGHTNING_SLUG) as unknown as { id: number } | undefined;
-
-  if (existing) {
-    db.prepare(
-      `UPDATE media_items SET
-        title = @title,
-        description = @description,
-        type = @type,
-        tags = @tags,
-        filename = @filename,
-        original_name = @original_name,
-        mime_type = @mime_type,
-        size_bytes = @size_bytes,
-        project_url = @project_url,
-        cover_filename = @cover_filename,
-        updated_at = datetime('now')
-       WHERE slug = @slug`
-    ).run(fields);
-  } else {
-    db.prepare(
-      `INSERT INTO media_items
-        (slug, title, description, type, tags, filename, original_name, mime_type, size_bytes, project_url, cover_filename)
-       VALUES
-        (@slug, @title, @description, @type, @tags, @filename, @original_name, @mime_type, @size_bytes, @project_url, @cover_filename)`
-    ).run(fields);
-  }
-}
-
-
-const LUMINA_SLUG = "lumina";
-const LUMINA_COVER = "/covers/lumina.jpg";
-
-/** Upsert the LUMINA to-do Library project card (Grok Build). Cover is served from public/covers (Vercel-safe). */
-function ensureLumina(db: DatabaseSync): void {
-  const fields = {
-    slug: LUMINA_SLUG,
+    tags: ["app", "grok-build", "word-lightning"],
+    filename: null,
+    originalName: null,
+    mimeType: null,
+    sizeBytes: null,
+    projectUrl: "https://harbor-beacon-prism-swift.grok.me",
+    coverFilename: "/covers/word-lightning.jpg",
+    createdAt: "2026-10-07T12:00:00.000Z",
+    updatedAt: "2026-10-07T12:00:00.000Z",
+    builtin: true,
+  },
+  {
+    id: -2,
+    slug: "lumina",
     title: "LUMINA",
     description:
       "A holographic to-do list from Grok Build. Clocks optional — she checks in if you stall.",
     type: "project",
-    tags: "app,grok-build,todo,lumina",
-    filename: null as string | null,
-    original_name: null as string | null,
-    mime_type: null as string | null,
-    size_bytes: null as number | null,
-    project_url: "https://wind-rocket-nova-palm.grok.me",
-    cover_filename: LUMINA_COVER,
+    tags: ["app", "grok-build", "todo", "lumina"],
+    filename: null,
+    originalName: null,
+    mimeType: null,
+    sizeBytes: null,
+    projectUrl: "https://wind-rocket-nova-palm.grok.me",
+    coverFilename: "/covers/lumina.jpg",
+    createdAt: "2026-10-07T12:00:01.000Z",
+    updatedAt: "2026-10-07T12:00:01.000Z",
+    builtin: true,
+  },
+];
+
+const BUILTIN_SLUGS = new Set(BUILTIN_ITEMS.map((i) => i.slug));
+
+export function isBuiltinSlug(slug: string): boolean {
+  return BUILTIN_SLUGS.has(slug);
+}
+
+// ---------------------------------------------------------------------------
+// Blob read / write
+// ---------------------------------------------------------------------------
+
+function normalizeDoc(raw: unknown): LibraryDoc {
+  if (!raw || typeof raw !== "object") return { ...EMPTY_DOC, items: [] };
+  const r = raw as Partial<LibraryDoc>;
+  const items = Array.isArray(r.items) ? r.items : [];
+  const maxId = items.reduce((m, i) => Math.max(m, Number(i.id) || 0), 0);
+  return {
+    version: 1,
+    nextId: Math.max(Number(r.nextId) || 1, maxId + 1),
+    items,
   };
+}
 
-  const existing = db
-    .prepare("SELECT id FROM media_items WHERE slug = ?")
-    .get(LUMINA_SLUG) as unknown as { id: number } | undefined;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const stripQuotes = (etag: string | null | undefined) => (etag ? etag.replace(/^W\//, "").replace(/"/g, "") : "");
+const md5 = (text: string) => createHash("md5").update(text).digest("hex");
+/** Immutable, content-addressed copy of a given version of items.json. */
+const versionPath = (hash: string) => `${VERSIONS_PREFIX}${hash}.json`;
 
-  if (existing) {
-    db.prepare(
-      `UPDATE media_items SET
-        title = @title,
-        description = @description,
-        type = @type,
-        tags = @tags,
-        filename = @filename,
-        original_name = @original_name,
-        mime_type = @mime_type,
-        size_bytes = @size_bytes,
-        project_url = @project_url,
-        cover_filename = @cover_filename,
-        updated_at = datetime('now')
-       WHERE slug = @slug`
-    ).run(fields);
-  } else {
-    db.prepare(
-      `INSERT INTO media_items
-        (slug, title, description, type, tags, filename, original_name, mime_type, size_bytes, project_url, cover_filename)
-       VALUES
-        (@slug, @title, @description, @type, @tags, @filename, @original_name, @mime_type, @size_bytes, @project_url, @cover_filename)`
-    ).run(fields);
+/**
+ * Consistent read of items.json.
+ *
+ * Public blob URLs are CDN-cached (min 60s) and query strings don't bust that
+ * cache, so the URL of a file that gets overwritten can serve old content for
+ * up to a minute. Instead:
+ *  1. head() (Blob API, always current) gives the ETag of items.json, which is
+ *     the MD5 of its content.
+ *  2. Every write also stores the same JSON at library/index/<md5>.json — an
+ *     immutable, content-addressed URL, so any cached copy is by definition
+ *     the right one.
+ *  3. We fetch that, verify the MD5, and fall back to the main URL (also
+ *     MD5-verified) for documents written before versioning existed.
+ */
+async function readDocFresh(): Promise<{ doc: LibraryDoc; etag: string | null }> {
+  const token = requireBlobToken();
+  const deadline = Date.now() + 15_000;
+  for (let attempt = 0; ; attempt++) {
+    let meta;
+    try {
+      meta = await head(ITEMS_PATHNAME, { token });
+    } catch (err) {
+      if (err instanceof BlobNotFoundError) return { doc: { ...EMPTY_DOC, items: [] }, etag: null };
+      throw err;
+    }
+    const want = stripQuotes(meta.etag);
+    for (const url of [publicBlobUrl(versionPath(want)), meta.url]) {
+      const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(15_000) });
+      const text = await res.text(); // always drain the body
+      if (res.ok && md5(text) === want) {
+        return { doc: normalizeDoc(JSON.parse(text)), etag: meta.etag };
+      }
+      if (!res.ok && res.status !== 404) throw new Error(`Failed to read Library index (${res.status})`);
+    }
+    console.warn(`Library: items.json version ${want} not readable yet (attempt ${attempt + 1})`);
+    if (Date.now() > deadline) throw new Error("Library index is still propagating; try again in a moment.");
+    await sleep(Math.min(500 * (attempt + 1), 2000));
   }
 }
 
-// Kept for reference; not called.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function seedDemoItems(db: DatabaseSync): void {
-  const insert = db.prepare(`
-    INSERT INTO media_items
-      (slug, title, description, type, tags, filename, original_name, mime_type, size_bytes, project_url, cover_filename)
-    VALUES
-      (@slug, @title, @description, @type, @tags, @filename, @original_name, @mime_type, @size_bytes, @project_url, @cover_filename)
-  `);
+const readDocCached = unstable_cache(
+  async (): Promise<LibraryDoc> => (await readDocFresh()).doc,
+  ["library-items-doc-v1"],
+  { tags: [CACHE_TAG], revalidate: CACHE_SECONDS }
+);
 
-  // Tiny SVG placeholders written into uploads so previews work out of the box
-  const uploads = path.join(DATA_DIR, "uploads");
-  const svg = (label: string, color: string) =>
-    Buffer.from(
-      `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="500" viewBox="0 0 800 500">
-        <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stop-color="${color}"/><stop offset="100%" stop-color="#1a1f2e"/>
-        </linearGradient></defs>
-        <rect width="800" height="500" fill="url(#g)"/>
-        <text x="50%" y="48%" text-anchor="middle" fill="#e8ecf4" font-family="system-ui,sans-serif" font-size="36" font-weight="600">${label}</text>
-        <text x="50%" y="58%" text-anchor="middle" fill="#8b95a8" font-family="system-ui,sans-serif" font-size="18">Demo placeholder</text>
-      </svg>`
-    );
-
-  const demoFiles: { name: string; buf: Buffer }[] = [
-    { name: "demo-studio.svg", buf: svg("Studio Still", "#8a7010") },
-    { name: "demo-cover.svg", buf: svg("Project Cover", "#a67c18") },
-    {
-      name: "demo-notes.txt",
-      buf: Buffer.from(
-        "Welcome to The Workshop - KrypticXtm.\nReplace this demo file anytime from the Admin page.\n"
-      ),
-    },
-  ];
-  for (const f of demoFiles) {
-    fs.writeFileSync(path.join(uploads, f.name), f.buf);
-  }
-
-  // Minimal valid PDF (one blank page) so PDF embed demo works
-  const pdf = Buffer.from(
-    `%PDF-1.1
-1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj
-2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj
-3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources<< /Font<< /F1 5 0 R >> >> >>endobj
-4 0 obj<< /Length 68 >>stream
-BT /F1 24 Tf 72 720 Td (Demo PDF — The Workshop - KrypticXtm) Tj ET
-endstream
-endobj
-5 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj
-xref
-0 6
-0000000000 65535 f 
-0000000009 00000 n 
-0000000058 00000 n 
-0000000115 00000 n 
-0000000266 00000 n 
-0000000385 00000 n 
-trailer<< /Size 6 /Root 1 0 R >>
-startxref
-462
-%%EOF
-`
-  );
-  fs.writeFileSync(path.join(uploads, "demo-sheet.pdf"), pdf);
-
-  const demos = [
-    {
-      slug: "studio-still-demo",
-      title: "Studio Still (Demo)",
-      description:
-        "A placeholder image so the library is not empty on first launch. Replace or delete anytime.",
-      type: "image",
-      tags: "demo,studio,photo",
-      filename: "demo-studio.svg",
-      original_name: "studio-still.svg",
-      mime_type: "image/svg+xml",
-      size_bytes: demoFiles[0].buf.length,
-      project_url: null,
-      cover_filename: null,
-    },
-    {
-      slug: "welcome-notes-demo",
-      title: "Welcome Notes (Demo)",
-      description:
-        "A sample text document. Upload real docs, PDFs, and spreadsheets from Admin.",
-      type: "doc",
-      tags: "demo,notes",
-      filename: "demo-notes.txt",
-      original_name: "welcome-notes.txt",
-      mime_type: "text/plain",
-      size_bytes: demoFiles[2].buf.length,
-      project_url: null,
-      cover_filename: null,
-    },
-    {
-      slug: "sample-pdf-demo",
-      title: "Sample PDF (Demo)",
-      description: "A tiny demo PDF with an embedded preview on its share page.",
-      type: "pdf",
-      tags: "demo,pdf",
-      filename: "demo-sheet.pdf",
-      original_name: "sample.pdf",
-      mime_type: "application/pdf",
-      size_bytes: pdf.length,
-      project_url: null,
-      cover_filename: null,
-    },
-    {
-      slug: "shape-morph-demo",
-      title: "Shape Morph (Demo Project)",
-      description:
-        "Example of an app/project entry — link out to a live URL with an optional cover image.",
-      type: "project",
-      tags: "demo,app,project",
-      filename: null,
-      original_name: null,
-      mime_type: null,
-      size_bytes: null,
-      project_url: "https://example.com",
-      cover_filename: "demo-cover.svg",
-    },
-  ];
-
-  db.exec("BEGIN");
+/** Doc for public pages. Falls back to an empty list (built-ins only) if Blob is unavailable. */
+async function readDocForDisplay(): Promise<LibraryDoc> {
+  if (!isBlobConfigured()) return { ...EMPTY_DOC, items: [] };
   try {
-    for (const d of demos) insert.run(d);
-    db.exec("COMMIT");
+    return await readDocCached();
   } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
+    // Outside a Next.js request (e.g. a maintenance script) there is no data cache.
+    if (err instanceof Error && /incrementalCache|static generation store/i.test(err.message)) {
+      return (await readDocFresh()).doc;
+    }
+    console.error("Library: failed to read items.json from Blob", err);
+    return { ...EMPTY_DOC, items: [] };
   }
 }
+
+function invalidate(): void {
+  try {
+    revalidateTag(CACHE_TAG);
+  } catch {
+    // Not inside a Next.js request (scripts) — nothing to invalidate.
+  }
+}
+
+/**
+ * Read-modify-write with optimistic concurrency. `fn` mutates the doc and
+ * returns a result; returning `undefined` skips the write.
+ */
+async function mutate<T>(fn: (doc: LibraryDoc) => T | undefined): Promise<T | undefined> {
+  const token = requireBlobToken();
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const { doc, etag } = await readDocFresh();
+    const result = fn(doc);
+    if (result === undefined) return undefined;
+    const json = JSON.stringify(doc, null, 1);
+    const hash = md5(json);
+    try {
+      // 1) immutable content-addressed copy first, so readers that see the new
+      //    ETag can always fetch it (see readDocFresh)
+      await put(versionPath(hash), json, {
+        access: "public",
+        token,
+        contentType: "application/json",
+        addRandomSuffix: false,
+        allowOverwrite: true,
+        cacheControlMaxAge: 31536000,
+      });
+      // 2) the main document, guarded by the ETag we read (optimistic concurrency)
+      const written = await put(ITEMS_PATHNAME, json, {
+        access: "public",
+        token,
+        contentType: "application/json",
+        addRandomSuffix: false,
+        cacheControlMaxAge: 60,
+        ...(etag ? { allowOverwrite: true, ifMatch: etag } : { allowOverwrite: false }),
+      });
+      const newTag = stripQuotes(written.etag);
+      if (newTag !== hash) {
+        // Safety net in case Blob ever stops using MD5 ETags.
+        console.warn("Library: unexpected ETag format from Blob; storing extra version copy");
+        await put(versionPath(newTag), json, {
+          access: "public",
+          token,
+          contentType: "application/json",
+          addRandomSuffix: false,
+          allowOverwrite: true,
+          cacheControlMaxAge: 31536000,
+        });
+      }
+      invalidate();
+      // 3) tidy up: drop the previous version copy (del is free)
+      const prev = stripQuotes(etag);
+      if (prev && prev !== hash && prev !== newTag) {
+        await del(publicBlobUrl(versionPath(prev)), { token }).catch(() => {});
+      }
+      return result;
+    } catch (err) {
+      const conflict =
+        err instanceof BlobPreconditionFailedError ||
+        (!etag && err instanceof Error && /already exists/i.test(err.message));
+      if (!conflict) throw err;
+      // Lost a race with another write: drop our unused version copy and retry.
+      await del(publicBlobUrl(versionPath(hash)), { token }).catch(() => {});
+      await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+    }
+  }
+  throw new Error("Library is busy (concurrent edits). Please try again.");
+}
+
+// ---------------------------------------------------------------------------
+// Mapping
+// ---------------------------------------------------------------------------
+
+function parseTags(tags: string | string[] | undefined | null): string[] {
+  const list = Array.isArray(tags) ? tags : String(tags || "").split(",");
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of list) {
+    const v = String(t).trim();
+    if (v && !seen.has(v.toLowerCase())) {
+      seen.add(v.toLowerCase());
+      out.push(v);
+    }
+  }
+  return out;
+}
+
+function toItem(s: StoredItem): MediaItem {
+  return {
+    id: s.id,
+    slug: s.slug,
+    title: s.title,
+    description: s.description || "",
+    type: s.type,
+    tags: parseTags(s.tags),
+    filename: s.fileUrl ?? null,
+    originalName: s.originalName ?? null,
+    mimeType: s.mimeType ?? null,
+    sizeBytes: s.sizeBytes ?? null,
+    projectUrl: s.projectUrl ?? null,
+    coverFilename: s.coverUrl ?? null,
+    createdAt: s.createdAt,
+    updatedAt: s.updatedAt,
+  };
+}
+
+function allItems(doc: LibraryDoc): MediaItem[] {
+  const stored = doc.items.filter((i) => !BUILTIN_SLUGS.has(i.slug)).map(toItem);
+  return [...BUILTIN_ITEMS, ...stored];
+}
+
+function sortNewestFirst(items: MediaItem[]): MediaItem[] {
+  return items.sort((a, b) => {
+    const d = Date.parse(b.createdAt) - Date.parse(a.createdAt);
+    return d !== 0 ? d : b.id - a.id;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Public API (same semantics as the old SQLite version, now async)
+// ---------------------------------------------------------------------------
 
 export interface ListFilters {
   q?: string;
@@ -325,97 +321,94 @@ export interface ListFilters {
   tag?: string;
 }
 
-export function listItems(filters: ListFilters = {}): MediaItem[] {
-  const db = getDb();
-  let sql = "SELECT * FROM media_items WHERE 1=1";
-  const params: Record<string, string> = {};
+export async function listItems(filters: ListFilters = {}): Promise<MediaItem[]> {
+  const doc = await readDocForDisplay();
+  let items = allItems(doc);
 
   if (filters.type && filters.type !== "all") {
-    sql += " AND type = @type";
-    params.type = filters.type;
+    items = items.filter((i) => i.type === filters.type);
   }
   if (filters.tag) {
-    sql += " AND (',' || lower(tags) || ',') LIKE @tag";
-    params.tag = `%,${filters.tag.toLowerCase()},%`;
+    const tag = filters.tag.toLowerCase();
+    items = items.filter((i) => i.tags.some((t) => t.toLowerCase() === tag));
   }
   if (filters.q) {
-    sql += ` AND (
-      lower(title) LIKE @q OR
-      lower(description) LIKE @q OR
-      lower(tags) LIKE @q OR
-      lower(COALESCE(original_name,'')) LIKE @q OR
-      lower(COALESCE(filename,'')) LIKE @q
-    )`;
-    params.q = `%${filters.q.toLowerCase()}%`;
+    const q = filters.q.toLowerCase();
+    items = items.filter((i) =>
+      [i.title, i.description, i.tags.join(","), i.originalName || "", i.filename || ""].some((f) =>
+        f.toLowerCase().includes(q)
+      )
+    );
   }
-
-  sql += " ORDER BY datetime(created_at) DESC, id DESC";
-  const rows = db.prepare(sql).all(params) as unknown as MediaItemRow[];
-  return rows.map(rowToItem);
+  return sortNewestFirst(items);
 }
 
-export function getItemBySlug(slug: string): MediaItem | null {
-  const db = getDb();
-  const row = db.prepare("SELECT * FROM media_items WHERE slug = ?").get(slug) as unknown as MediaItemRow | undefined;
-  return row ? rowToItem(row) : null;
+export async function getItemBySlug(slug: string): Promise<MediaItem | null> {
+  const builtin = BUILTIN_ITEMS.find((i) => i.slug === slug);
+  if (builtin) return builtin;
+  const doc = await readDocForDisplay();
+  const s = doc.items.find((i) => i.slug === slug);
+  return s ? toItem(s) : null;
 }
 
-export function getItemById(id: number): MediaItem | null {
-  const db = getDb();
-  const row = db.prepare("SELECT * FROM media_items WHERE id = ?").get(id) as unknown as MediaItemRow | undefined;
-  return row ? rowToItem(row) : null;
+export async function getItemById(id: number): Promise<MediaItem | null> {
+  const builtin = BUILTIN_ITEMS.find((i) => i.id === id);
+  if (builtin) return builtin;
+  const doc = await readDocForDisplay();
+  const s = doc.items.find((i) => i.id === id);
+  return s ? toItem(s) : null;
 }
 
-export function getAllTags(): string[] {
-  const db = getDb();
-  const rows = db.prepare("SELECT tags FROM media_items").all() as unknown as { tags: string }[];
+export async function getAllTags(): Promise<string[]> {
+  const doc = await readDocForDisplay();
   const set = new Set<string>();
-  for (const r of rows) {
-    for (const t of r.tags.split(",")) {
-      const trimmed = t.trim();
-      if (trimmed) set.add(trimmed);
-    }
-  }
+  for (const item of allItems(doc)) for (const t of item.tags) set.add(t);
   return Array.from(set).sort((a, b) => a.localeCompare(b));
 }
 
 export interface CreateItemInput {
-  slug: string;
+  /** Optional preferred slug; a unique one is generated from the title otherwise. */
+  slug?: string;
   title: string;
   description?: string;
   type: MediaType;
   tags?: string;
-  filename?: string | null;
+  filename?: string | null; // public blob URL
   originalName?: string | null;
   mimeType?: string | null;
   sizeBytes?: number | null;
   projectUrl?: string | null;
-  coverFilename?: string | null;
+  coverFilename?: string | null; // public blob URL or /covers/... static path
 }
 
-export function createItem(input: CreateItemInput): MediaItem {
-  const db = getDb();
-  const info = db
-    .prepare(
-      `INSERT INTO media_items
-        (slug, title, description, type, tags, filename, original_name, mime_type, size_bytes, project_url, cover_filename)
-       VALUES
-        (@slug, @title, @description, @type, @tags, @filename, @original_name, @mime_type, @size_bytes, @project_url, @cover_filename)`
-    )
-    .run({
-      slug: input.slug,
+export async function createItem(input: CreateItemInput): Promise<MediaItem> {
+  const created = await mutate((doc) => {
+    const taken = new Set([...BUILTIN_SLUGS, ...doc.items.map((i) => i.slug)]);
+    let slug = input.slug && !taken.has(input.slug) ? input.slug : makeSlug(input.title);
+    while (taken.has(slug)) slug = makeSlug(input.title);
+
+    const now = new Date().toISOString();
+    const item: StoredItem = {
+      id: doc.nextId,
+      slug,
       title: input.title,
       description: input.description || "",
       type: input.type,
-      tags: input.tags || "",
-      filename: input.filename ?? null,
-      original_name: input.originalName ?? null,
-      mime_type: input.mimeType ?? null,
-      size_bytes: input.sizeBytes ?? null,
-      project_url: input.projectUrl ?? null,
-      cover_filename: input.coverFilename ?? null,
-    });
-  return getItemById(Number(info.lastInsertRowid))!;
+      tags: parseTags(input.tags),
+      fileUrl: input.filename ?? null,
+      originalName: input.originalName ?? null,
+      mimeType: input.mimeType ?? null,
+      sizeBytes: input.sizeBytes ?? null,
+      projectUrl: input.projectUrl ?? null,
+      coverUrl: input.coverFilename ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    doc.nextId += 1;
+    doc.items.push(item);
+    return item;
+  });
+  return toItem(created!);
 }
 
 export interface UpdateItemInput {
@@ -426,36 +419,34 @@ export interface UpdateItemInput {
   projectUrl?: string | null;
 }
 
-export function updateItem(id: number, input: UpdateItemInput): MediaItem | null {
-  const db = getDb();
-  const existing = getItemById(id);
-  if (!existing) return null;
-
-  db.prepare(
-    `UPDATE media_items SET
-      title = @title,
-      description = @description,
-      type = @type,
-      tags = @tags,
-      project_url = @project_url,
-      updated_at = datetime('now')
-     WHERE id = @id`
-  ).run({
-    id,
-    title: input.title ?? existing.title,
-    description: input.description ?? existing.description,
-    type: input.type ?? existing.type,
-    tags: input.tags ?? existing.tags.join(","),
-    project_url: input.projectUrl !== undefined ? input.projectUrl : existing.projectUrl,
+export async function updateItem(id: number, input: UpdateItemInput): Promise<MediaItem | null> {
+  const updated = await mutate((doc) => {
+    const s = doc.items.find((i) => i.id === id);
+    if (!s) return undefined;
+    if (input.title !== undefined) s.title = input.title;
+    if (input.description !== undefined) s.description = input.description;
+    if (input.type !== undefined) s.type = input.type;
+    if (input.tags !== undefined) s.tags = parseTags(input.tags);
+    if (input.projectUrl !== undefined) s.projectUrl = input.projectUrl;
+    s.updatedAt = new Date().toISOString();
+    return { ...s };
   });
-
-  return getItemById(id);
+  return updated ? toItem(updated) : null;
 }
 
-export function deleteItem(id: number): MediaItem | null {
-  const db = getDb();
-  const existing = getItemById(id);
-  if (!existing) return null;
-  db.prepare("DELETE FROM media_items WHERE id = ?").run(id);
-  return existing;
+/** Removes the item from the index and returns it (caller deletes its blobs). */
+export async function deleteItem(id: number): Promise<MediaItem | null> {
+  const removed = await mutate((doc) => {
+    const idx = doc.items.findIndex((i) => i.id === id);
+    if (idx === -1) return undefined;
+    const [s] = doc.items.splice(idx, 1);
+    return s;
+  });
+  return removed ? toItem(removed) : null;
+}
+
+/** True if any stored item references this blob URL (used before deleting orphan uploads). */
+export async function isUrlReferenced(url: string): Promise<boolean> {
+  const { doc } = await readDocFresh();
+  return doc.items.some((i) => i.fileUrl === url || i.coverUrl === url);
 }

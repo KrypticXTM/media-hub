@@ -2,8 +2,17 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { upload } from "@vercel/blob/client";
+import {
+  COVERS_PREFIX,
+  MAX_COVER_BYTES,
+  formatLimit,
+  guessContentType,
+  isAllowedContentType,
+  safeBlobName,
+} from "@/lib/upload-rules";
 
-export default function ProjectForm() {
+export default function ProjectForm({ disabled = false }: { disabled?: boolean }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -17,16 +26,19 @@ export default function ProjectForm() {
     const form = e.currentTarget;
     const fd = new FormData(form);
 
+    let coverUrl: string | null = null;
     try {
-      let coverFilename: string | null = null;
       const cover = fd.get("cover");
       if (cover && cover instanceof File && cover.size > 0) {
-        const up = new FormData();
-        up.set("file", cover);
-        const upRes = await fetch("/api/upload/raw", { method: "POST", body: up });
-        const upJson = await upRes.json();
-        if (!upRes.ok) throw new Error(upJson.error || "Cover upload failed");
-        coverFilename = upJson.filename;
+        const contentType = guessContentType(cover.name, cover.type);
+        if (!isAllowedContentType(contentType, ["image/*"])) throw new Error("Cover must be an image");
+        if (cover.size > MAX_COVER_BYTES) throw new Error(`Cover is too large (max ${formatLimit(MAX_COVER_BYTES)})`);
+        const blob = await upload(`${COVERS_PREFIX}${safeBlobName(cover.name)}`, cover, {
+          access: "public",
+          handleUploadUrl: "/api/upload",
+          contentType,
+        });
+        coverUrl = blob.url;
       }
 
       const res = await fetch("/api/items", {
@@ -38,16 +50,24 @@ export default function ProjectForm() {
           tags: String(fd.get("tags") || ""),
           type: "project",
           projectUrl: String(fd.get("projectUrl") || "").trim() || null,
-          coverFilename,
+          coverUrl,
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to add project");
+      coverUrl = null;
       setMessage(`Project added — share link: /i/${json.item.slug}`);
       form.reset();
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed");
+      if (coverUrl) {
+        fetch("/api/upload", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: coverUrl }),
+        }).catch(() => {});
+      }
     } finally {
       setBusy(false);
     }
@@ -90,7 +110,7 @@ export default function ProjectForm() {
       {error ? <p className="text-sm text-studio-danger">{error}</p> : null}
       {message ? <p className="text-sm text-studio-success">{message}</p> : null}
 
-      <button type="submit" disabled={busy} className="studio-btn-primary">
+      <button type="submit" disabled={disabled || busy} className="studio-btn-primary">
         {busy ? "Saving…" : "Add project"}
       </button>
     </form>

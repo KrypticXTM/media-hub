@@ -18,7 +18,7 @@ type Props = { params: Promise<{ slug: string }> };
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
-  const item = getItemBySlug(slug);
+  const item = await getItemBySlug(slug);
   if (!item) return { title: "Not found" };
   return {
     title: item.title,
@@ -28,7 +28,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function ItemPage({ params }: Props) {
   const { slug } = await params;
-  const item = getItemBySlug(slug);
+  const item = await getItemBySlug(slug);
   if (!item) notFound();
   const authed = await isAuthenticated();
   const path = sharePath(item.slug);
@@ -56,7 +56,7 @@ export default async function ItemPage({ params }: Props) {
         ) : null}
         <div className="flex flex-wrap gap-2">
           {item.tags.map((t) => (
-            <TagBadge key={t} tag={t} href={`/?tag=${encodeURIComponent(t)}`} />
+            <TagBadge key={t} tag={t} href={`/library?tag=${encodeURIComponent(t)}`} />
           ))}
         </div>
       </div>
@@ -138,7 +138,7 @@ export default async function ItemPage({ params }: Props) {
               ) : null}
             </>
           ) : null}
-          {authed ? <DeleteButton id={item.id} title={item.title} /> : null}
+          {authed && !item.builtin ? <DeleteButton id={item.id} title={item.title} /> : null}
         </div>
       </div>
 

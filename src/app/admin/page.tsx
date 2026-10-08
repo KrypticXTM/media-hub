@@ -3,6 +3,7 @@ import ProjectForm from "@/components/ProjectForm";
 import UploadForm from "@/components/UploadForm";
 import { isAuthenticated } from "@/lib/auth";
 import { listItems } from "@/lib/db";
+import { isBlobConfigured } from "@/lib/storage";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +14,8 @@ export default async function AdminPage() {
     redirect("/login");
   }
 
-  const recent = listItems().slice(0, 8);
+  const storageReady = isBlobConfigured();
+  const recent = (await listItems()).slice(0, 8);
 
   return (
     <div className="space-y-8">
@@ -25,9 +27,20 @@ export default async function AdminPage() {
         </p>
       </section>
 
+      {!storageReady ? (
+        <div className="studio-card border-studio-danger/40 p-4 text-sm text-studio-danger" role="alert">
+          <p className="font-semibold">File storage is not configured.</p>
+          <p className="mt-1 text-studio-muted">
+            BLOB_READ_WRITE_TOKEN is missing, so uploads, edits and deletes are disabled. On Vercel, connect the
+            Blob store to this project; locally, run <span className="font-mono">vercel env pull .env.local</span>{" "}
+            and restart the dev server.
+          </p>
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <UploadForm />
-        <ProjectForm />
+        <UploadForm disabled={!storageReady} />
+        <ProjectForm disabled={!storageReady} />
       </div>
 
       <section className="studio-card p-5">

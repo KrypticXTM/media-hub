@@ -48,43 +48,46 @@ Config lives in `src/lib/merch.ts`. Leave `storeUrl` as `null` for a friendly co
 - ADMIN_PASSWORD (required) — password for the Login page
 - SESSION_SECRET (required) — long random string that signs the session cookie
 - NEXT_PUBLIC_SITE_NAME (optional) — title shown in the header (default: The Workshop - KrypticXtm)
+- BLOB_READ_WRITE_TOKEN (required for uploads) — Vercel Blob token. Set automatically on Vercel because the `workshop-library` Blob store is connected to the project; locally run `npx vercel env pull .env.local`. Without it the Library still shows the built-in items, and Admin shows a "File storage is not configured" notice.
 
 Do not commit .env.local (it is gitignored).
 
 ## Where data lives
 
-- data/media.db — titles, tags, slugs, metadata
-- data/uploads/ — the actual files (gitignored)
+Library data lives in the Vercel Blob store `workshop-library` (free Hobby tier), so uploads survive cold starts and redeploys:
+
+- library/files/… and library/covers/… — uploaded files (public blobs; browsers load them straight from Blob)
+- library/items.json — the Library item list (titles, tags, slugs, file URLs, dates). library/index/<md5>.json is an immutable copy of the current version used for always-fresh reads (see src/lib/db.ts)
+- Word Lightning and LUMINA are defined in code (src/lib/db.ts, covers in public/covers) and merged in at read time
 - src/lib/products.ts — shop catalog (edit by hand)
 - src/lib/merch.ts — merch store URL config
 
-Comments in src/lib/storage.ts explain how to later swap local disk for S3, Cloudflare R2, or Vercel Blob.
+Uploads go straight from the browser to Blob (client uploads), so files up to 100 MB work even though Vercel functions cap request bodies at ~4.5 MB. Deleting an item also deletes its file.
 
 ## Free deploy notes (Vercel)
 
-On free Vercel, the shop and browsing work, but owner uploads on the public URL won't stick; use a local PC or a paid disk host for lasting uploads.
+Everything runs on free Vercel features. Vercel Blob on Hobby includes 1 GB storage, 10,000 simple operations, 2,000 advanced operations (uploads) and 10 GB data transfer per month; if a limit is exceeded Blob pauses until the 30-day window resets (no charges). See https://vercel.com/docs/vercel-blob/usage-and-pricing
 
 ## Main routes
 
-- / — public library
+- / — redirects to /shop
+- /library — public library
 - /shop — public shop (Polar Buy links)
 - /merch — public merch (external store or coming soon)
 - /i/[slug] — public item detail (preview, download, copy link; Buy if tagged for sale)
 - /login — owner password form
 - /admin — owner upload UI
-- /api/files/[filename] — serves uploaded files
-- /api/upload — owner file upload
-- /api/items — library API
+- /api/upload — owner-only: issues Vercel Blob client-upload tokens (and removes orphaned uploads)
+- /api/items, /api/items/[id] — library API (list, create, edit, delete)
 
 ## Stack
 
-Next.js App Router, TypeScript, Tailwind CSS, node:sqlite (DatabaseSync), HMAC-signed session cookie. Shop checkout via Polar hosted links.
+Next.js App Router, TypeScript, Tailwind CSS, Vercel Blob (@vercel/blob), HMAC-signed session cookie. Shop checkout via Polar hosted links.
 
 ## Troubleshooting
 
 - Wrong password: fix ADMIN_PASSWORD in .env.local and restart the server
-- Empty library: delete data/media.db and restart; demo items seed when the DB is empty
-- node:sqlite missing: use Node.js 22.5+. No Visual Studio Build Tools needed on Windows.
+- "File storage is not configured" in Admin: BLOB_READ_WRITE_TOKEN is missing — run `npx vercel env pull .env.local` and restart
 - Shop Buy link wrong: edit polarCheckoutUrl in src/lib/products.ts and restart / rebuild
 
 ## Exact commands
