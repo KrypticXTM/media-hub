@@ -71,15 +71,123 @@ export function getDb(): DatabaseSync {
 
   dbInstance = db;
 
-  // Seed demo items once (when table is empty)
-  const count = db.prepare("SELECT COUNT(*) AS c FROM media_items").get() as unknown as { c: number } | undefined;
-  if (!count || count.c === 0) {
-    seedDemoItems(db);
-  }
+  // Demo/sample items are no longer seeded; remove any left over from older builds.
+  db.prepare(
+    "DELETE FROM media_items WHERE slug IN ('studio-still-demo','welcome-notes-demo','sample-pdf-demo','shape-morph-demo')"
+  ).run();
+
+  // Always ensure featured Grok Build apps exist (existing DBs + redeploys)
+  ensureWordLightning(db);
+  ensureLumina(db);
 
   return db;
 }
 
+
+// Static public asset (bundled with the deploy) — not /tmp uploads
+const WORD_LIGHTNING_COVER = "/covers/word-lightning.jpg";
+const WORD_LIGHTNING_SLUG = "word-lightning";
+
+/** Upsert the Library project card. Cover is served from public/covers (Vercel-safe). */
+function ensureWordLightning(db: DatabaseSync): void {
+  const fields = {
+    slug: WORD_LIGHTNING_SLUG,
+    title: "Word Lightning",
+    description:
+      "A Grok Build app for verbal fluency. Open the live app from The Workshop - KrypticXtm.",
+    type: "project",
+    tags: "app,grok-build,word-lightning",
+    filename: null as string | null,
+    original_name: null as string | null,
+    mime_type: null as string | null,
+    size_bytes: null as number | null,
+    project_url: "https://harbor-beacon-prism-swift.grok.me",
+    cover_filename: WORD_LIGHTNING_COVER,
+  };
+
+  const existing = db
+    .prepare("SELECT id FROM media_items WHERE slug = ?")
+    .get(WORD_LIGHTNING_SLUG) as unknown as { id: number } | undefined;
+
+  if (existing) {
+    db.prepare(
+      `UPDATE media_items SET
+        title = @title,
+        description = @description,
+        type = @type,
+        tags = @tags,
+        filename = @filename,
+        original_name = @original_name,
+        mime_type = @mime_type,
+        size_bytes = @size_bytes,
+        project_url = @project_url,
+        cover_filename = @cover_filename,
+        updated_at = datetime('now')
+       WHERE slug = @slug`
+    ).run(fields);
+  } else {
+    db.prepare(
+      `INSERT INTO media_items
+        (slug, title, description, type, tags, filename, original_name, mime_type, size_bytes, project_url, cover_filename)
+       VALUES
+        (@slug, @title, @description, @type, @tags, @filename, @original_name, @mime_type, @size_bytes, @project_url, @cover_filename)`
+    ).run(fields);
+  }
+}
+
+
+const LUMINA_SLUG = "lumina";
+const LUMINA_COVER = "/covers/lumina.jpg";
+
+/** Upsert the LUMINA to-do Library project card (Grok Build). Cover is served from public/covers (Vercel-safe). */
+function ensureLumina(db: DatabaseSync): void {
+  const fields = {
+    slug: LUMINA_SLUG,
+    title: "LUMINA",
+    description:
+      "A holographic to-do list from Grok Build. Clocks optional — she checks in if you stall.",
+    type: "project",
+    tags: "app,grok-build,todo,lumina",
+    filename: null as string | null,
+    original_name: null as string | null,
+    mime_type: null as string | null,
+    size_bytes: null as number | null,
+    project_url: "https://wind-rocket-nova-palm.grok.me",
+    cover_filename: LUMINA_COVER,
+  };
+
+  const existing = db
+    .prepare("SELECT id FROM media_items WHERE slug = ?")
+    .get(LUMINA_SLUG) as unknown as { id: number } | undefined;
+
+  if (existing) {
+    db.prepare(
+      `UPDATE media_items SET
+        title = @title,
+        description = @description,
+        type = @type,
+        tags = @tags,
+        filename = @filename,
+        original_name = @original_name,
+        mime_type = @mime_type,
+        size_bytes = @size_bytes,
+        project_url = @project_url,
+        cover_filename = @cover_filename,
+        updated_at = datetime('now')
+       WHERE slug = @slug`
+    ).run(fields);
+  } else {
+    db.prepare(
+      `INSERT INTO media_items
+        (slug, title, description, type, tags, filename, original_name, mime_type, size_bytes, project_url, cover_filename)
+       VALUES
+        (@slug, @title, @description, @type, @tags, @filename, @original_name, @mime_type, @size_bytes, @project_url, @cover_filename)`
+    ).run(fields);
+  }
+}
+
+// Kept for reference; not called.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function seedDemoItems(db: DatabaseSync): void {
   const insert = db.prepare(`
     INSERT INTO media_items
@@ -108,7 +216,7 @@ function seedDemoItems(db: DatabaseSync): void {
     {
       name: "demo-notes.txt",
       buf: Buffer.from(
-        "Welcome to your media hub.\nReplace this demo file anytime from the Admin page.\n"
+        "Welcome to The Workshop - KrypticXtm.\nReplace this demo file anytime from the Admin page.\n"
       ),
     },
   ];
@@ -123,7 +231,7 @@ function seedDemoItems(db: DatabaseSync): void {
 2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj
 3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources<< /Font<< /F1 5 0 R >> >> >>endobj
 4 0 obj<< /Length 68 >>stream
-BT /F1 24 Tf 72 720 Td (Demo PDF — Tim Media Hub) Tj ET
+BT /F1 24 Tf 72 720 Td (Demo PDF — The Workshop - KrypticXtm) Tj ET
 endstream
 endobj
 5 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj

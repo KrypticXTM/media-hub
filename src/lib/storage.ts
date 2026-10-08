@@ -49,6 +49,8 @@ export function storeFile(buffer: Buffer, originalName: string): string {
 
 export function deleteFile(filename: string | null | undefined): void {
   if (!filename) return;
+  // Public static paths (e.g. /covers/...) are not uploads — never delete them
+  if (filename.startsWith("/")) return;
   const full = getFilePath(filename);
   if (fs.existsSync(full)) {
     fs.unlinkSync(full);

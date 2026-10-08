@@ -1,5 +1,28 @@
+"use client";
+
+import { useState } from "react";
 import type { MediaItem } from "@/lib/types";
 import { fileUrl } from "@/lib/format";
+
+function CoverImage({ src, alt }: { src: string; alt: string }) {
+  const [broken, setBroken] = useState(false);
+  if (broken) {
+    return (
+      <div className="flex aspect-video items-center justify-center bg-studio-panel text-studio-muted">
+        Project
+      </div>
+    );
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={alt}
+      className="max-h-[480px] w-full object-cover"
+      onError={() => setBroken(true)}
+    />
+  );
+}
 
 export default function ItemPreview({ item }: { item: MediaItem }) {
   if (item.type === "project") {
@@ -7,8 +30,7 @@ export default function ItemPreview({ item }: { item: MediaItem }) {
     return (
       <div className="studio-card overflow-hidden">
         {cover ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={cover} alt={item.title} className="max-h-[480px] w-full object-cover" />
+          <CoverImage src={cover} alt={item.title} />
         ) : (
           <div className="flex aspect-video items-center justify-center bg-studio-panel text-studio-muted">
             Project

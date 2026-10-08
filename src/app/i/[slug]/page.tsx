@@ -3,12 +3,13 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import CopyLinkButton from "@/components/CopyLinkButton";
 import DeleteButton from "@/components/DeleteButton";
+import FeedbackForm from "@/components/FeedbackForm";
 import ItemPreview from "@/components/ItemPreview";
 import TagBadge from "@/components/TagBadge";
 import { isAuthenticated } from "@/lib/auth";
 import { getItemBySlug } from "@/lib/db";
 import { fileUrl, formatBytes, formatDate, sharePath } from "@/lib/format";
-import { findProductForItem } from "@/lib/products";
+import { findProductForItem, getCheckoutOptions, isTipJarProduct, SUPPORT_CTA_ABOVE, SUPPORT_CTA_SUBTEXT } from "@/lib/products";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -32,11 +33,14 @@ export default async function ItemPage({ params }: Props) {
   const authed = await isAuthenticated();
   const path = sharePath(item.slug);
   const product = findProductForItem(item);
+  const isTipJar = product ? isTipJarProduct(product) : false;
+  const checkoutOptions = product ? getCheckoutOptions(product) : [];
+  const showFeedback = item.type === "project" || Boolean(product);
 
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-center gap-3 text-sm text-studio-muted">
-        <Link href="/" className="hover:text-studio-accent">
+        <Link href="/library" className="hover:text-studio-accent">
           ← Library
         </Link>
         <span>·</span>
@@ -64,19 +68,34 @@ export default async function ItemPage({ params }: Props) {
               Available in Shop
             </p>
             <p className="text-sm text-studio-text">
-              {product.title} · <span className="font-semibold text-white">{product.price}</span>
+              {product.title}{isTipJar ? null : (
+                <> · <span className="font-semibold text-white">{product.price}</span></>
+              )}
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <a
-              href={product.polarCheckoutUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="studio-btn-primary"
-            >
-              Buy
-            </a>
-            <Link href="/shop" className="studio-btn-ghost">
+          <div className="flex flex-wrap items-center gap-2">
+            {checkoutOptions.length > 0 ? (
+              <div className="flex flex-col gap-1">
+                {isTipJar ? (
+                  <p className="text-xs font-medium text-studio-muted">{SUPPORT_CTA_ABOVE}</p>
+                ) : null}
+                {checkoutOptions.map((opt) => (
+                  <a
+                    key={opt.label}
+                    href={opt.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="studio-btn-primary shrink-0 self-start whitespace-nowrap"
+                  >
+                    {opt.label}
+                  </a>
+                ))}
+                {isTipJar ? (
+                  <p className="text-xs text-studio-muted">{SUPPORT_CTA_SUBTEXT}</p>
+                ) : null}
+              </div>
+            ) : null}
+            <Link href="/shop" className="studio-btn-ghost shrink-0">
               View Shop
             </Link>
           </div>
@@ -103,18 +122,29 @@ export default async function ItemPage({ params }: Props) {
             </a>
           ) : null}
           {item.type === "project" && item.projectUrl ? (
-            <a
-              href={item.projectUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="studio-btn-primary"
-            >
-              Open project
-            </a>
+            <>
+              <a
+                href={item.projectUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="studio-btn-primary"
+              >
+                Open App
+              </a>
+              {product ? (
+                <span className="rounded-full border border-emerald-300/25 bg-emerald-300/10 px-2.5 py-1 text-xs font-medium text-emerald-200">
+                  Free
+                </span>
+              ) : null}
+            </>
           ) : null}
           {authed ? <DeleteButton id={item.id} title={item.title} /> : null}
         </div>
       </div>
+
+      {showFeedback ? (
+        <FeedbackForm projectTitle={item.title} projectSlug={item.slug} />
+      ) : null}
     </div>
   );
 }

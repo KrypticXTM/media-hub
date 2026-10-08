@@ -18,8 +18,13 @@ export function formatDate(iso: string): string {
   }
 }
 
+/** Public path (starts with /) is returned as-is; otherwise served via /api/files. */
 export function fileUrl(filename: string | null | undefined, download = false): string {
   if (!filename) return "";
+  if (filename.startsWith("/")) {
+    // Static public asset — ignore download flag (browsers handle Save As)
+    return filename;
+  }
   const base = `/api/files/${encodeURIComponent(filename)}`;
   return download ? `${base}?download=1` : base;
 }

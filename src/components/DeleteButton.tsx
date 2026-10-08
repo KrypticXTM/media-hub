@@ -16,7 +16,7 @@ export default function DeleteButton({ id, title }: { id: number; title: string 
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || "Delete failed");
       }
-      router.push("/");
+      router.push("/library");
       router.refresh();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Delete failed");

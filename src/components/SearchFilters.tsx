@@ -25,7 +25,7 @@ export default function SearchFilters({ tags }: { tags: string[] }) {
       if (merged.type && merged.type !== "all") sp.set("type", merged.type);
       if (merged.tag) sp.set("tag", merged.tag);
       startTransition(() => {
-        router.push(sp.toString() ? `/?${sp}` : "/");
+        router.push(sp.toString() ? `/library?${sp}` : "/library");
       });
     },
     [q, type, tag, router]

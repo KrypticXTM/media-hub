@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
 import type { MediaItem } from "@/lib/types";
 import { fileUrl, formatBytes } from "@/lib/format";
@@ -22,8 +25,26 @@ function thumbSrc(item: MediaItem): string | null {
   return null;
 }
 
+function TypePlaceholder({ item }: { item: MediaItem }) {
+  return (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-studio-muted">
+      <span className="text-3xl opacity-70">
+        {item.type === "video"
+          ? "▶"
+          : item.type === "pdf"
+            ? "PDF"
+            : item.type === "project"
+              ? "◇"
+              : "▣"}
+      </span>
+      <span className="text-xs uppercase tracking-wider">{TYPE_LABEL[item.type] || item.type}</span>
+    </div>
+  );
+}
+
 export default function ItemCard({ item }: { item: MediaItem }) {
   const thumb = thumbSrc(item);
+  const [broken, setBroken] = useState(false);
 
   return (
     <Link
@@ -31,26 +52,16 @@ export default function ItemCard({ item }: { item: MediaItem }) {
       className="studio-card group flex flex-col overflow-hidden transition hover:-translate-y-0.5 hover:border-studio-accent/30 hover:shadow-glow"
     >
       <div className="relative aspect-[16/10] overflow-hidden bg-studio-panel">
-        {thumb ? (
+        {thumb && !broken ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={thumb}
             alt={item.title}
             className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]"
+            onError={() => setBroken(true)}
           />
         ) : (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-studio-muted">
-            <span className="text-3xl opacity-70">
-              {item.type === "video"
-                ? "▶"
-                : item.type === "pdf"
-                  ? "PDF"
-                  : item.type === "project"
-                    ? "◇"
-                    : "▣"}
-            </span>
-            <span className="text-xs uppercase tracking-wider">{TYPE_LABEL[item.type] || item.type}</span>
-          </div>
+          <TypePlaceholder item={item} />
         )}
         <span className="absolute left-3 top-3 rounded-full border border-white/10 bg-black/50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-white backdrop-blur">
           {TYPE_LABEL[item.type] || item.type}

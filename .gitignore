@@ -14,3 +14,9 @@
 *.tsbuildinfo
 bun.lock
 bun.lockb
+.vercel
+
+# Keep committed seed assets (covers) while uploads stay local
+!/data/seed/
+!/data/seed/**
+.env*

@@ -2,15 +2,22 @@ import type { Metadata } from "next";
 import Header from "@/components/Header";
 import "./globals.css";
 
-const siteName = process.env.NEXT_PUBLIC_SITE_NAME || "Media Hub";
+const siteName = process.env.NEXT_PUBLIC_SITE_NAME || "The Workshop - KrypticXtm";
+
+const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL?.trim() ||
+  (process.env.VERCEL_PROJECT_PRODUCTION_URL
+    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+    : "https://media-hub-lyart.vercel.app");
 
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: {
     default: siteName,
     template: `%s · ${siteName}`,
   },
   description:
-    "Personal studio — media library and shop for digital products (checkout via Polar).",
+    "The Workshop - KrypticXtm — media library and shop for digital products (support via Buy Me A Coffee).",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -20,7 +27,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <Header />
         <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10">{children}</main>
         <footer className="mx-auto max-w-6xl px-4 pb-10 text-center text-xs text-studio-muted sm:px-6">
-          Personal media hub · Library + Shop · Share links look like{" "}
+          The Workshop - KrypticXtm · Library + Shop · Share links look like{" "}
           <span className="font-mono text-studio-muted/90">/i/your-slug</span>
         </footer>
       </body>
