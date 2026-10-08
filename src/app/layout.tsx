@@ -14,7 +14,7 @@ const siteUrl =
 const shareUrl = "https://media-hub-lyart.vercel.app";
 const shareTitle = "The Workshop - KrypticXtm";
 const shareDescription = "Apps and pages I built with Grok and Grokbot. Explore The Workshop.";
-const shareImage = `${shareUrl}/covers/active-projects.jpg`;
+const shareImage = `${shareUrl}/covers/workshop-card.jpg`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
@@ -30,7 +30,7 @@ export const metadata: Metadata = {
     title: shareTitle,
     description: shareDescription,
     url: `${shareUrl}/`,
-    images: [{ url: shareImage, width: 1280, height: 720, alt: shareTitle }],
+    images: [{ url: shareImage, width: 1200, height: 630, alt: shareTitle }],
   },
   twitter: {
     card: "summary_large_image",
